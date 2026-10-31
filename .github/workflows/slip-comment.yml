@@ -43,12 +43,14 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const fs = require('fs');
             core.info('TRUSTED script ran - no hijack');
+            core.info('payload exists? ' + fs.existsSync('ext-links-findings/out.md'));
 
       - name: Verify marker
         if: always()
         shell: bash
         run: |
-          echo "--- extraction dir ---"; ls -la ext-links-findings || true
+          echo "--- extracted tree ---"; find ext-links-findings -maxdepth 9 | head -40
           echo "--- workspace ---"; ls -la
           cat PWNED.txt || echo "NO MARKER FILE"
