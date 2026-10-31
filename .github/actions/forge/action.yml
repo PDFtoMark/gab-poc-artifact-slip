@@ -1,0 +1,5 @@
+name: forge
+description: Craft an artifact zip with traversal entries and upload it via the artifact service
+runs:
+  using: node24
+  main: index.js
