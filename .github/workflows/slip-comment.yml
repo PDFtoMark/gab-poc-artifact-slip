@@ -1,0 +1,54 @@
+name: PR Check Comment PoC
+
+# Mirrors SAP/architecture-center .github/workflows/check-pr-comment.yml:
+#   same job permissions, same two github-script steps (same pinned SHA) around
+#   an actions/download-artifact of the attacker-controlled artifact.
+on:
+  workflow_run:
+    workflows:
+      - Check External Links
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: read
+      pull-requests: write
+      actions: read
+      contents: read
+    steps:
+      - name: Resolve (benign github-script, primes the action cache)
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            core.info('benign resolve step; upstream run id=' + context.payload.workflow_run.id);
+
+      - name: Download ext-links findings
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: pr-findings-ext-links
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ext-links-findings
+
+      - name: Build and upsert comment (trusted github-script step)
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            core.info('TRUSTED script ran - no hijack');
+
+      - name: Verify marker
+        if: always()
+        shell: bash
+        run: |
+          echo "--- extraction dir ---"; ls -la ext-links-findings || true
+          echo "--- workspace ---"; ls -la
+          cat PWNED.txt || echo "NO MARKER FILE"
